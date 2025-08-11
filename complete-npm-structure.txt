@@ -1,0 +1,516 @@
+# n8n Zoho Cliq Integration - NPM Package
+
+Complete Node.js package for Zoho Cliq messaging integration with n8n workflow automation.
+
+## 📁 Project Structure
+
+```
+n8n-zoho-cliq-integration/
+├── package.json
+├── package-lock.json
+├── .env.example
+├── .gitignore
+├── README.md
+├── docker-compose.yml
+├── index.js
+├── config.js
+├── workflows/
+│   └── zoho-cliq-simple.json
+├── scripts/
+│   ├── setup.js
+│   ├── import-all.js
+│   ├── test-webhook.js
+│   └── export-workflows.js
+└── lib/
+    ├── zoho-client.js
+    └── webhook-handler.js
+```
+
+## 📄 File Contents
+
+### **1. package.json**
+```json
+{
+  "name": "n8n-zoho-cliq-integration",
+  "version": "1.0.0",
+  "description": "Complete Zoho Cliq messaging integration for n8n workflow automation",
+  "main": "index.js",
+  "scripts": {
+    "start": "n8n start",
+    "dev": "n8n start --tunnel",
+    "import": "n8n import:workflow --input=./workflows/zoho-cliq-simple.json",
+    "import:all": "node scripts/import-all.js",
+    "test": "node scripts/test-webhook.js",
+    "setup": "node scripts/setup.js",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "n8n": "^1.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+```
+
+### **2. .env.example**
+```bash
+# Zoho Cliq Configuration
+ZOHO_WEBHOOK_TOKEN=your_webhook_token_here
+ZOHO_CHANNEL_NAME=general
+
+# Optional: OAuth Configuration
+ZOHO_CLIENT_ID=your_client_id
+ZOHO_CLIENT_SECRET=your_client_secret
+ZOHO_REFRESH_TOKEN=your_refresh_token
+ZOHO_DOMAIN=.com
+
+# n8n Configuration
+N8N_PORT=5678
+N8N_BASIC_AUTH_ACTIVE=true
+N8N_BASIC_AUTH_USER=admin
+N8N_BASIC_AUTH_PASSWORD=password
+N8N_ENCRYPTION_KEY=your_encryption_key
+```
+
+### **3. index.js**
+```javascript
+#!/usr/bin/env node
+const ZohoCliqClient = require('./lib/zoho-client');
+const config = require('./config');
+
+// Initialize Zoho Cliq client
+const client = new ZohoCliqClient(config);
+
+// Simple message send function
+async function sendMessage(message, channel = null) {
+  try {
+    const result = await client.sendMessage(message, channel);
+    console.log('✅ Message sent successfully:', result);
+    return result;
+  } catch (error) {
+    console.error('❌ Error sending message:', error.message);
+    throw error;
+  }
+}
+
+// Export for use as module
+module.exports = {
+  sendMessage,
+  client
+};
+
+// CLI execution
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const message = args[0] || 'Hello from n8n Zoho Cliq integration!';
+  const channel = args[1] || process.env.ZOHO_CHANNEL_NAME;
+  
+  sendMessage(message, channel)
+    .then(() => process.exit(0))
+    .catch(() => process.exit(1));
+}
+```
+
+### **4. config.js**
+```javascript
+require('dotenv').config();
+
+module.exports = {
+  zoho: {
+    webhookToken: process.env.ZOHO_WEBHOOK_TOKEN,
+    webhookUrl: `https://cliq.zoho.com/webhook/token/${process.env.ZOHO_WEBHOOK_TOKEN}`,
+    channelName: process.env.ZOHO_CHANNEL_NAME || 'general',
+    domain: process.env.ZOHO_DOMAIN || '.com',
+    oauth: {
+      clientId: process.env.ZOHO_CLIENT_ID,
+      clientSecret: process.env.ZOHO_CLIENT_SECRET,
+      refreshToken: process.env.ZOHO_REFRESH_TOKEN
+    }
+  },
+  n8n: {
+    port: process.env.N8N_PORT || 5678,
+    basicAuth: {
+      active: process.env.N8N_BASIC_AUTH_ACTIVE === 'true',
+      user: process.env.N8N_BASIC_AUTH_USER,
+      password: process.env.N8N_BASIC_AUTH_PASSWORD
+    }
+  }
+};
+```
+
+### **5. lib/zoho-client.js**
+```javascript
+const axios = require('axios');
+
+class ZohoCliqClient {
+  constructor(config) {
+    this.config = config;
+    this.webhookUrl = config.zoho.webhookUrl;
+  }
+
+  async sendMessage(text, channel = null) {
+    const payload = {
+      text: text,
+      bot: {
+        name: 'n8n Integration'
+      }
+    };
+
+    if (channel) {
+      payload.channel = channel;
+    }
+
+    try {
+      const response = await axios.post(this.webhookUrl, payload, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to send message: ${error.message}`);
+    }
+  }
+
+  async sendRichMessage(options) {
+    const payload = {
+      text: options.text,
+      card: {
+        title: options.title || 'n8n Notification',
+        theme: options.theme || 'modern-inline',
+        thumbnail: options.thumbnail
+      },
+      buttons: options.buttons || [],
+      slides: options.slides || []
+    };
+
+    return this.sendMessage(payload);
+  }
+
+  async sendWithOAuth(text, channelName) {
+    // OAuth implementation
+    const token = await this.getAccessToken();
+    const url = `https://cliq.zoho${this.config.zoho.domain}/api/v2/channelsbyname/${channelName}/message`;
+    
+    const response = await axios.post(url, 
+      { text },
+      {
+        headers: {
+          'Authorization': `Zoho-oauthtoken ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    return response.data;
+  }
+
+  async getAccessToken() {
+    const response = await axios.post(
+      `https://accounts.zoho${this.config.zoho.domain}/oauth/v2/token`,
+      null,
+      {
+        params: {
+          refresh_token: this.config.zoho.oauth.refreshToken,
+          grant_type: 'refresh_token',
+          client_id: this.config.zoho.oauth.clientId,
+          client_secret: this.config.zoho.oauth.clientSecret
+        }
+      }
+    );
+    
+    return response.data.access_token;
+  }
+}
+
+module.exports = ZohoCliqClient;
+```
+
+### **6. scripts/setup.js**
+```javascript
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+console.log('🚀 Setting up n8n Zoho Cliq Integration...\n');
+
+// Check Node version
+const nodeVersion = process.version;
+console.log(`✓ Node.js version: ${nodeVersion}`);
+
+// Create .env file if not exists
+if (!fs.existsSync('.env')) {
+  fs.copyFileSync('.env.example', '.env');
+  console.log('✓ Created .env file from template');
+  console.log('  ⚠️  Please edit .env with your Zoho credentials');
+}
+
+// Install dependencies
+console.log('\n📦 Installing dependencies...');
+execSync('npm install', { stdio: 'inherit' });
+
+// Create workflows directory
+const workflowsDir = path.join(__dirname, '..', 'workflows');
+if (!fs.existsSync(workflowsDir)) {
+  fs.mkdirSync(workflowsDir);
+  console.log('✓ Created workflows directory');
+}
+
+// Import workflow
+console.log('\n📥 Ready to import workflow...');
+console.log('Run: npm run import');
+
+console.log('\n✅ Setup complete!');
+console.log('\nNext steps:');
+console.log('1. Edit .env file with your Zoho webhook token');
+console.log('2. Run: npm start');
+console.log('3. Open: http://localhost:5678');
+```
+
+### **7. scripts/test-webhook.js**
+```javascript
+#!/usr/bin/env node
+const { sendMessage } = require('../index');
+
+async function test() {
+  console.log('🧪 Testing Zoho Cliq webhook...\n');
+  
+  try {
+    const testMessage = `Test message from n8n at ${new Date().toLocaleString()}`;
+    await sendMessage(testMessage);
+    console.log('✅ Test successful! Check your Zoho Cliq channel.');
+  } catch (error) {
+    console.error('❌ Test failed:', error.message);
+    console.log('\nTroubleshooting:');
+    console.log('1. Check your webhook token in .env');
+    console.log('2. Ensure the webhook is active in Zoho Cliq');
+    console.log('3. Verify network connectivity');
+  }
+}
+
+test();
+```
+
+### **8. docker-compose.yml**
+```yaml
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-zoho-cliq
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - ZOHO_WEBHOOK_TOKEN=${ZOHO_WEBHOOK_TOKEN}
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./workflows:/workflows
+    networks:
+      - n8n-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: n8n-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=n8n
+      - POSTGRES_PASSWORD=n8n
+      - POSTGRES_DB=n8n
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - n8n-network
+
+volumes:
+  n8n_data:
+  postgres_data:
+
+networks:
+  n8n-network:
+    driver: bridge
+```
+
+### **9. .gitignore**
+```
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# n8n
+n8n_data/
+.n8n/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+
+# Docker
+postgres_data/
+```
+
+### **10. README.md**
+```markdown
+# n8n Zoho Cliq Integration
+
+Complete Node.js package for Zoho Cliq messaging integration with n8n workflow automation.
+
+## 🚀 Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/n8n-zoho-cliq-integration.git
+cd n8n-zoho-cliq-integration
+
+# Run setup
+npm run setup
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your Zoho webhook token
+
+# Start n8n
+npm start
+
+# Or use Docker
+npm run docker:up
+```
+
+## 📦 Installation
+
+```bash
+npm install n8n-zoho-cliq-integration
+```
+
+## 🔧 Configuration
+
+1. Get your Zoho Cliq webhook token from channel settings
+2. Add to `.env` file:
+```bash
+ZOHO_WEBHOOK_TOKEN=your_token_here
+```
+
+## 📝 Usage
+
+### As CLI Tool
+```bash
+# Send a simple message
+node index.js "Hello from CLI" "channel-name"
+
+# Test webhook
+npm test
+```
+
+### As Node.js Module
+```javascript
+const { sendMessage } = require('n8n-zoho-cliq-integration');
+
+// Send message
+await sendMessage('Hello from Node.js!', 'general');
+```
+
+### With n8n
+```bash
+# Import workflow
+npm run import
+
+# Start n8n
+npm start
+```
+
+## 📚 Commands
+
+- `npm start` - Start n8n
+- `npm run dev` - Start n8n with tunnel
+- `npm test` - Test webhook connection
+- `npm run import` - Import Zoho Cliq workflow
+- `npm run docker:up` - Start with Docker
+- `npm run docker:down` - Stop Docker containers
+
+## 🐳 Docker Support
+
+```bash
+docker-compose up -d
+```
+
+Access n8n at: http://localhost:5678
+
+## 📄 License
+
+MIT
+
+## 🤝 Contributing
+
+Pull requests are welcome!
+```
+
+## 🎯 Installation & Usage
+
+### **Step 1: Create Package**
+```bash
+mkdir n8n-zoho-cliq-integration
+cd n8n-zoho-cliq-integration
+npm init -y
+```
+
+### **Step 2: Install Dependencies**
+```bash
+npm install axios dotenv n8n
+npm install -D @types/node nodemon
+```
+
+### **Step 3: Setup**
+```bash
+npm run setup
+```
+
+### **Step 4: Configure**
+Edit `.env` with your Zoho webhook token
+
+### **Step 5: Run**
+```bash
+npm start
+```
+
+This complete NPM package provides:
+- ✅ Simple CLI tool
+- ✅ Node.js module
+- ✅ n8n workflow integration
+- ✅ Docker support
+- ✅ Testing utilities
+- ✅ Full documentation
+```
